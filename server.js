@@ -13,9 +13,15 @@ const express = require('express');
 const multer = require('multer');
 const cors = require('cors');
 const path = require('path');
+const http = require('http');
+const { Server } = require('socket.io');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const httpServer = http.createServer(app);
+const io = new Server(httpServer, {
+  cors: { origin: '*' }
+});
 
 // Model that supports both text-to-image generation AND image editing
 // (send an input image + instructions, get an edited image back).
@@ -127,11 +133,101 @@ app.post('/api/generate-image', upload.single('image'), async (req, res) => {
 // Health check (useful for Render/Railway/Fly.io deploy checks)
 app.get('/api/health', (req, res) => res.json({ ok: true }));
 
+// ---------------------------------------------------------------
+// WebRTC signaling (Socket.IO). This server never sees or relays
+// the actual video/audio — it only exchanges the small handshake
+// messages (offer/answer/ICE candidates) needed for two browsers
+// to find each other. Once connected, media flows either directly
+// P2P or through a TURN relay (see /api/turn-credentials below).
+// ---------------------------------------------------------------
+const roomOccupants = new Map(); // roomCode -> Set of socket ids
+
+io.on('connection', (socket) => {
+  socket.on('join-room', (roomCode) => {
+    if (!roomCode) return;
+
+    const existing = roomOccupants.get(roomCode) || new Set();
+    if (existing.size >= 2) {
+      socket.emit('room-full');
+      return;
+    }
+
+    existing.add(socket.id);
+    roomOccupants.set(roomCode, existing);
+    socket.join(roomCode);
+    socket.data.room = roomCode;
+
+    const otherPeers = [...existing].filter(id => id !== socket.id);
+    // Tell the newcomer who's already there (so it knows whether to
+    // be the one to create the WebRTC "offer").
+    socket.emit('joined-room', { initiator: otherPeers.length === 0, peers: otherPeers });
+    // Tell existing peer(s) someone new arrived.
+    socket.to(roomCode).emit('peer-joined', { peerId: socket.id });
+  });
+
+  socket.on('signal', ({ to, data }) => {
+    io.to(to).emit('signal', { from: socket.id, data });
+  });
+
+  socket.on('leave-room', () => cleanupSocket(socket));
+  socket.on('disconnect', () => cleanupSocket(socket));
+
+  function cleanupSocket(sock) {
+    const roomCode = sock.data.room;
+    if (!roomCode) return;
+    const set = roomOccupants.get(roomCode);
+    if (set) {
+      set.delete(sock.id);
+      if (set.size === 0) roomOccupants.delete(roomCode);
+    }
+    sock.to(roomCode).emit('peer-left', { peerId: sock.id });
+    sock.data.room = null;
+  }
+});
+
+// ---------------------------------------------------------------
+// TURN credentials endpoint. STUN alone (Google's public servers)
+// works fine when both callers are on relatively open networks,
+// but mobile carrier networks (e.g. Globe, Smart) commonly sit
+// behind Carrier-Grade NAT that blocks direct P2P — that's the
+// "black screen" scenario. A TURN server relays the media in that
+// case. This defaults to the free public "Open Relay Project" demo
+// TURN server so it works out of the box; for more reliable/higher
+// -capacity TURN, sign up for a free Metered.ca account and set
+// TURN_USERNAME / TURN_CREDENTIAL / TURN_URL as environment
+// variables on Render (Dashboard → your service → Environment).
+// ---------------------------------------------------------------
+app.get('/api/turn-credentials', (req, res) => {
+  const iceServers = [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' }
+  ];
+
+  if (process.env.TURN_URL && process.env.TURN_USERNAME && process.env.TURN_CREDENTIAL) {
+    iceServers.push({
+      urls: process.env.TURN_URL,
+      username: process.env.TURN_USERNAME,
+      credential: process.env.TURN_CREDENTIAL
+    });
+  } else {
+    // Free public demo TURN server (Open Relay Project). Fine for
+    // testing and light personal use; can hit capacity limits under
+    // heavy use since it's a shared public resource.
+    iceServers.push(
+      { urls: 'turn:global.relay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+      { urls: 'turn:global.relay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+      { urls: 'turn:global.relay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' }
+    );
+  }
+
+  res.json({ iceServers });
+});
+
 // Fallback to index.html for any other route (simple SPA-style serving)
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-app.listen(PORT, () => {
+httpServer.listen(PORT, () => {
   console.log(`Media Gallery + AI Studio server running on port ${PORT}`);
 });
