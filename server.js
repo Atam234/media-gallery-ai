@@ -24,9 +24,12 @@ const io = new Server(httpServer, {
 });
 
 // Model that supports both text-to-image generation AND image editing
-// (send an input image + instructions, get an edited image back).
+// (send an input image + instructions, get an edited image back), used
+// as the default when the person picks Google or OpenRouter without
+// specifying their own model.
 const GEMINI_IMAGE_MODEL = 'gemini-2.5-flash-image';
 const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
+const OPENROUTER_DEFAULT_IMAGE_MODEL = 'google/gemini-2.5-flash-image';
 
 app.use(cors());
 app.use(express.json({ limit: '15mb' }));
@@ -42,93 +45,180 @@ const upload = multer({
 /**
  * POST /api/generate-image
  * multipart/form-data fields:
- *   - apiKey   (required) the user's Google AI Studio API key
+ *   - provider (required) one of: "google" | "openrouter" | "groq" | "custom"
+ *   - apiKey   (required) the API key for that provider
  *   - prompt   (required) text instructions
- *   - image    (optional) a source image file to edit
+ *   - model    (optional) override the default model for that provider
+ *   - baseUrl  (required only for provider "custom") an OpenAI-compatible base URL
+ *   - image    (optional) a source image file to edit / analyze
  *
- * Returns: { image: "data:image/png;base64,....", mimeType, text }
+ * Returns: { image: "data:...;base64,....", text } — image is omitted
+ * when the provider/model only supports analyzing images, not creating them.
  */
 app.post('/api/generate-image', upload.single('image'), async (req, res) => {
   try {
-    const { apiKey, prompt } = req.body;
+    const { apiKey, prompt, provider, model, baseUrl } = req.body;
 
     if (!apiKey || !apiKey.trim()) {
-      return res.status(400).json({ error: 'Missing Google AI Studio API key.' });
+      return res.status(400).json({ error: 'Missing API key.' });
     }
     if (!prompt || !prompt.trim()) {
       return res.status(400).json({ error: 'Missing prompt.' });
     }
 
-    const parts = [{ text: prompt.trim() }];
+    const imageFile = req.file
+      ? { buffer: req.file.buffer, mimeType: req.file.mimetype || 'image/png' }
+      : null;
 
-    if (req.file) {
-      parts.push({
-        inlineData: {
-          mimeType: req.file.mimetype || 'image/png',
-          data: req.file.buffer.toString('base64')
+    let result;
+    switch (provider) {
+      case 'google':
+        result = await callGoogleGemini({ apiKey, prompt, imageFile });
+        break;
+      case 'openrouter':
+        result = await callOpenRouterImages({ apiKey, prompt, imageFile, model });
+        break;
+      case 'groq':
+        result = await callOpenAICompatibleVision({
+          apiKey,
+          prompt,
+          imageFile,
+          model,
+          baseUrl: 'https://api.groq.com/openai/v1',
+          providerLabel: 'Groq'
+        });
+        break;
+      case 'custom':
+        if (!baseUrl || !baseUrl.trim()) {
+          return res.status(400).json({ error: 'Missing Base URL for the custom provider.' });
         }
-      });
+        result = await callOpenAICompatibleVision({
+          apiKey,
+          prompt,
+          imageFile,
+          model,
+          baseUrl: baseUrl.trim().replace(/\/+$/, ''),
+          providerLabel: 'Custom provider'
+        });
+        break;
+      default:
+        return res.status(400).json({ error: 'Unknown or missing provider.' });
     }
 
-    const url = `${GEMINI_API_BASE}/models/${GEMINI_IMAGE_MODEL}:generateContent`;
-
-    const googleResp = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-goog-api-key': apiKey.trim()
-      },
-      body: JSON.stringify({
-        contents: [{ role: 'user', parts }],
-        generationConfig: {
-          responseModalities: ['IMAGE', 'TEXT']
-        }
-      })
-    });
-
-    const data = await googleResp.json();
-
-    if (!googleResp.ok) {
-      const message =
-        (data && data.error && data.error.message) ||
-        `Google API returned status ${googleResp.status}`;
-      return res.status(googleResp.status).json({ error: message });
-    }
-
-    const candidate = data?.candidates?.[0];
-    const responseParts = candidate?.content?.parts || [];
-
-    let imageOut = null;
-    let mimeType = 'image/png';
-    let textOut = '';
-
-    for (const part of responseParts) {
-      if (part.inlineData && part.inlineData.data) {
-        imageOut = part.inlineData.data;
-        mimeType = part.inlineData.mimeType || mimeType;
-      } else if (part.text) {
-        textOut += part.text;
-      }
-    }
-
-    if (!imageOut) {
-      return res.status(502).json({
-        error:
-          textOut ||
-          'The model did not return an image. Try rephrasing your prompt.'
-      });
-    }
-
-    return res.json({
-      image: `data:${mimeType};base64,${imageOut}`,
-      mimeType,
-      text: textOut
-    });
+    return res.json(result);
   } catch (err) {
     console.error('Generate image error:', err);
     return res.status(500).json({ error: 'Server error: ' + err.message });
   }
 });
+
+// ---- Provider: Google AI Studio (Gemini) — image generation + editing ----
+async function callGoogleGemini({ apiKey, prompt, imageFile }) {
+  const parts = [{ text: prompt.trim() }];
+  if (imageFile) {
+    parts.push({
+      inlineData: { mimeType: imageFile.mimeType, data: imageFile.buffer.toString('base64') }
+    });
+  }
+
+  const url = `${GEMINI_API_BASE}/models/${GEMINI_IMAGE_MODEL}:generateContent`;
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey.trim() },
+    body: JSON.stringify({
+      contents: [{ role: 'user', parts }],
+      generationConfig: { responseModalities: ['IMAGE', 'TEXT'] }
+    })
+  });
+
+  const data = await resp.json();
+  if (!resp.ok) {
+    throw new Error((data && data.error && data.error.message) || `Google API returned status ${resp.status}`);
+  }
+
+  const responseParts = data?.candidates?.[0]?.content?.parts || [];
+  let imageOut = null, mimeType = 'image/png', textOut = '';
+  for (const part of responseParts) {
+    if (part.inlineData && part.inlineData.data) {
+      imageOut = part.inlineData.data;
+      mimeType = part.inlineData.mimeType || mimeType;
+    } else if (part.text) {
+      textOut += part.text;
+    }
+  }
+
+  if (!imageOut) {
+    throw new Error(textOut || 'The model did not return an image. Try rephrasing your prompt.');
+  }
+  return { image: `data:${mimeType};base64,${imageOut}`, text: textOut };
+}
+
+// ---- Provider: OpenRouter — dedicated Image API (many image models, incl. Gemini) ----
+async function callOpenRouterImages({ apiKey, prompt, imageFile, model }) {
+  const body = {
+    model: (model && model.trim()) || OPENROUTER_DEFAULT_IMAGE_MODEL,
+    prompt: prompt.trim()
+  };
+
+  if (imageFile) {
+    const dataUrl = `data:${imageFile.mimeType};base64,${imageFile.buffer.toString('base64')}`;
+    body.input_references = [{ type: 'image_url', image_url: { url: dataUrl } }];
+  }
+
+  const resp = await fetch('https://openrouter.ai/api/v1/images', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey.trim()}` },
+    body: JSON.stringify(body)
+  });
+
+  const data = await resp.json();
+  if (!resp.ok) {
+    throw new Error((data && data.error && data.error.message) || `OpenRouter returned status ${resp.status}`);
+  }
+
+  const first = data?.data?.[0];
+  if (!first || !first.b64_json) {
+    throw new Error('OpenRouter did not return image data. Try a different model (see openrouter.ai/models?output_modalities=image).');
+  }
+  const mimeType = first.media_type || 'image/png';
+  return { image: `data:${mimeType};base64,${first.b64_json}`, text: '' };
+}
+
+// ---- Providers: Groq / any custom OpenAI-compatible endpoint ----
+// Neither Groq nor most self-hosted/OpenAI-compatible endpoints currently
+// offer image *generation* — they offer fast text and, for vision models,
+// image *understanding*. So this path sends the image (if any) + prompt
+// to a chat-completions endpoint and returns text only, and says so
+// clearly rather than pretending to produce an edited image.
+async function callOpenAICompatibleVision({ apiKey, prompt, imageFile, model, baseUrl, providerLabel }) {
+  const content = [{ type: 'text', text: prompt.trim() }];
+  if (imageFile) {
+    const dataUrl = `data:${imageFile.mimeType};base64,${imageFile.buffer.toString('base64')}`;
+    content.push({ type: 'image_url', image_url: { url: dataUrl } });
+  }
+
+  const resp = await fetch(`${baseUrl}/chat/completions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey.trim()}` },
+    body: JSON.stringify({
+      model: (model && model.trim()) || undefined,
+      messages: [{ role: 'user', content }]
+    })
+  });
+
+  const data = await resp.json();
+  if (!resp.ok) {
+    throw new Error((data && data.error && data.error.message) || `${providerLabel} returned status ${resp.status}`);
+  }
+
+  const text = data?.choices?.[0]?.message?.content || '';
+  if (!text) {
+    throw new Error(`${providerLabel} returned an empty response.`);
+  }
+  return {
+    text: `[${providerLabel} — text/vision analysis lang, hindi image generation]\n\n${text}`
+  };
+}
 
 // Health check (useful for Render/Railway/Fly.io deploy checks)
 app.get('/api/health', (req, res) => res.json({ ok: true }));
