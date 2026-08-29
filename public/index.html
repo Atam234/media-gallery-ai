@@ -104,15 +104,36 @@
         <!-- AI STUDIO -->
         <div id="aiSection" class="hidden">
             <div class="api-config">
-                <h4><i class="fas fa-key"></i> Google AI Studio API Key</h4>
+                <h4><i class="fas fa-plug"></i> AI Provider</h4>
                 <div class="form-group" style="margin-bottom:8px;">
-                    <input type="password" id="apiKeyInput" placeholder="Ilagay ang iyong Gemini API key (AIza...)">
+                    <select id="providerSelect" onchange="onProviderChange()">
+                        <option value="google">Google AI Studio (Gemini) — generate + edit ng larawan</option>
+                        <option value="openrouter">OpenRouter — generate + edit (maraming models)</option>
+                        <option value="groq">Groq — vision/text analysis lang (walang image generation)</option>
+                        <option value="custom">Custom / OpenAI-compatible — vision/text analysis lang</option>
+                    </select>
+                </div>
+                <p id="providerNote" style="color:#9ca3af; font-size:0.8rem; margin-bottom:10px;"></p>
+
+                <div class="form-group" id="baseUrlGroup" style="margin-bottom:8px; display:none;">
+                    <label style="font-size:0.8rem;">Base URL</label>
+                    <input type="text" id="baseUrlInput" placeholder="Hal. https://api.together.xyz/v1">
+                </div>
+
+                <div class="form-group" id="modelGroup" style="margin-bottom:8px; display:none;">
+                    <label style="font-size:0.8rem;">Model (optional override)</label>
+                    <input type="text" id="modelInput" placeholder="">
+                </div>
+
+                <div class="form-group" style="margin-bottom:8px;">
+                    <label style="font-size:0.8rem;">API Key</label>
+                    <input type="password" id="apiKeyInput" placeholder="Ilagay ang API key ng provider na pinili mo">
                 </div>
                 <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;">
                     <label style="display:flex; align-items:center; gap:6px; font-size:0.8rem; color:#9ca3af;">
                         <input type="checkbox" id="rememberKey" style="width:auto;"> I-save ang key sa browser na ito
                     </label>
-                    <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">
+                    <a id="providerKeyLink" href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">
                         <i class="fas fa-external-link-alt"></i> Kumuha ng API key
                     </a>
                 </div>

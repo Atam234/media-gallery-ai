@@ -70,7 +70,7 @@ const audioPlayer = document.getElementById('audioPlayer');
   photos = await idbGetAll('photos');
   music = await idbGetAll('music');
 
-  const savedKey = localStorage.getItem('gemini_api_key');
+  const savedKey = localStorage.getItem('api_key_google');
   if (savedKey) {
     document.getElementById('apiKeyInput').value = savedKey;
     document.getElementById('rememberKey').checked = true;
@@ -78,6 +78,7 @@ const audioPlayer = document.getElementById('audioPlayer');
 
   renderPhotos();
   renderMusic();
+  onProviderChange();
 })();
 
 function uid() {
@@ -323,6 +324,59 @@ async function deleteSelectedMusic() {
   renderMusic();
 }
 
+// ---------- AI Studio: provider config ----------
+const PROVIDER_INFO = {
+  google: {
+    note: 'Puwedeng mag-generate ng bagong larawan o mag-edit gamit ang source image.',
+    keyLink: 'https://aistudio.google.com/apikey',
+    showModel: false,
+    showBaseUrl: false
+  },
+  openrouter: {
+    note: 'Puwedeng mag-generate/mag-edit ng larawan. Default model: google/gemini-2.5-flash-image — puwede mong palitan sa ibaba.',
+    keyLink: 'https://openrouter.ai/settings/keys',
+    showModel: true,
+    modelPlaceholder: 'google/gemini-2.5-flash-image',
+    showBaseUrl: false
+  },
+  groq: {
+    note: '⚠️ Walang image generation model si Groq — bibigyan ka lang ng text na paglalarawan/pagsusuri ng larawan mo, hindi bagong larawan.',
+    keyLink: 'https://console.groq.com/keys',
+    showModel: true,
+    modelPlaceholder: 'hal. llama-3.2-90b-vision-preview',
+    showBaseUrl: false
+  },
+  custom: {
+    note: '⚠️ Text/vision analysis lang (OpenAI-compatible chat format). Ilagay ang Base URL ng provider mo (hal. Together AI, Fireworks, atbp).',
+    keyLink: '',
+    showModel: true,
+    modelPlaceholder: 'pangalan ng model',
+    showBaseUrl: true
+  }
+};
+
+function onProviderChange() {
+  const provider = document.getElementById('providerSelect').value;
+  const info = PROVIDER_INFO[provider];
+
+  document.getElementById('providerNote').textContent = info.note;
+  document.getElementById('modelGroup').style.display = info.showModel ? 'block' : 'none';
+  document.getElementById('modelInput').placeholder = info.modelPlaceholder || '';
+  document.getElementById('baseUrlGroup').style.display = info.showBaseUrl ? 'block' : 'none';
+
+  const keyLink = document.getElementById('providerKeyLink');
+  if (info.keyLink) {
+    keyLink.href = info.keyLink;
+    keyLink.style.display = 'inline';
+  } else {
+    keyLink.style.display = 'none';
+  }
+
+  const savedKey = localStorage.getItem(`api_key_${provider}`);
+  document.getElementById('apiKeyInput').value = savedKey || '';
+  document.getElementById('rememberKey').checked = !!savedKey;
+}
+
 // ---------- AI Studio ----------
 function handleAIImageSelect(event) {
   const file = event.target.files[0];
@@ -347,7 +401,10 @@ function clearAISourceImage() {
 }
 
 async function runAIGenerate() {
+  const provider = document.getElementById('providerSelect').value;
   const apiKey = document.getElementById('apiKeyInput').value.trim();
+  const model = document.getElementById('modelInput').value.trim();
+  const baseUrl = document.getElementById('baseUrlInput').value.trim();
   const prompt = document.getElementById('aiPrompt').value.trim();
   const remember = document.getElementById('rememberKey').checked;
   const resultBox = document.getElementById('aiResult');
@@ -360,20 +417,25 @@ async function runAIGenerate() {
     showToast('Maglagay ng prompt.');
     return;
   }
+  if (provider === 'custom' && !baseUrl) {
+    showToast('Kailangan ng Base URL para sa custom provider.');
+    return;
+  }
 
   if (remember) {
-    localStorage.setItem('gemini_api_key', apiKey);
-  } else {
-    localStorage.removeItem('gemini_api_key');
+    localStorage.setItem(`api_key_${provider}`, apiKey);
   }
 
   resultBox.classList.remove('hidden');
-  resultBox.innerHTML = `<div class="loading"><div class="spinner"></div> Ginagawa ng AI ang larawan...</div>`;
+  resultBox.innerHTML = `<div class="loading"><div class="spinner"></div> Tinatawagan ang AI...</div>`;
 
   try {
     const formData = new FormData();
+    formData.append('provider', provider);
     formData.append('apiKey', apiKey);
     formData.append('prompt', prompt);
+    if (model) formData.append('model', model);
+    if (baseUrl) formData.append('baseUrl', baseUrl);
     if (aiSourceImageFile) {
       formData.append('image', aiSourceImageFile);
     }
@@ -389,15 +451,19 @@ async function runAIGenerate() {
       return;
     }
 
-    const resultId = uid();
-    resultBox.innerHTML = `
-      ${data.text ? `<p class="ai-text">${escapeHtml(data.text)}</p>` : ''}
-      <img src="${data.image}" id="aiResultImg-${resultId}" alt="AI result">
-      <button class="btn btn-primary" onclick="saveAIResultToGallery('${resultId}')">
-        <i class="fas fa-save"></i> I-save sa Gallery
-      </button>
-    `;
-    resultBox.dataset.lastImage = data.image;
+    if (data.image) {
+      const resultId = uid();
+      resultBox.innerHTML = `
+        ${data.text ? `<p class="ai-text">${escapeHtml(data.text)}</p>` : ''}
+        <img src="${data.image}" id="aiResultImg-${resultId}" alt="AI result">
+        <button class="btn btn-primary" onclick="saveAIResultToGallery('${resultId}')">
+          <i class="fas fa-save"></i> I-save sa Gallery
+        </button>
+      `;
+    } else {
+      // Text-only response (e.g. Groq / custom vision analysis — no image generated)
+      resultBox.innerHTML = `<p class="ai-text" style="white-space:pre-wrap;">${escapeHtml(data.text || 'Walang laman ang sagot.')}</p>`;
+    }
   } catch (err) {
     resultBox.innerHTML = `<p class="ai-error"><i class="fas fa-exclamation-triangle"></i> ${escapeHtml(err.message)}</p>`;
   }
