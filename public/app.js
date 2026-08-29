@@ -111,6 +111,7 @@ function switchTab(tab) {
   document.getElementById('photosSection').classList.toggle('hidden', tab !== 'photos');
   document.getElementById('musicSection').classList.toggle('hidden', tab !== 'music');
   document.getElementById('aiSection').classList.toggle('hidden', tab !== 'ai');
+  document.getElementById('callSection').classList.toggle('hidden', tab !== 'call');
 }
 
 // ---------- Photos ----------

@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="tl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Media Gallery + AI Studio</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1><i class="fas fa-photo-video"></i> Media Gallery + AI</h1>
+            <p>I-save ang pictures at music, gumamit ng AI para mag-generate/mag-edit ng larawan</p>
+        </div>
+
+        <div class="stats">
+            <div class="stat">
+                <div class="stat-value" id="photoCount">0</div>
+                <div class="stat-label">Photos</div>
+            </div>
+            <div class="stat">
+                <div class="stat-value" id="musicCount">0</div>
+                <div class="stat-label">Songs</div>
+            </div>
+        </div>
+
+        <div class="tabs">
+            <button class="tab-btn active" data-tab="photos" onclick="switchTab('photos')">
+                <i class="fas fa-images"></i> Pictures
+            </button>
+            <button class="tab-btn" data-tab="music" onclick="switchTab('music')">
+                <i class="fas fa-music"></i> Music
+            </button>
+            <button class="tab-btn" data-tab="ai" onclick="switchTab('ai')">
+                <i class="fas fa-robot"></i> AI Studio
+            </button>
+            <button class="tab-btn" data-tab="call" onclick="switchTab('call')">
+                <i class="fas fa-video"></i> Video Call
+            </button>
+        </div>
+
+        <!-- PHOTOS -->
+        <div id="photosSection">
+            <div class="upload-area" onclick="document.getElementById('photoInput').click()">
+                <i class="fas fa-cloud-upload-alt"></i>
+                <p>Click para mag-upload ng pictures<br><small>(JPG, PNG, GIF, WEBP)</small></p>
+                <input type="file" id="photoInput" accept="image/*" multiple onchange="handlePhotoUpload(event)">
+            </div>
+
+            <div class="toolbar">
+                <div class="toolbar-left">
+                    <button class="select-all-btn" onclick="toggleSelectAllPhotos()">
+                        <i class="fas fa-check-square"></i> Select All
+                    </button>
+                    <button class="delete-selected-btn" id="deletePhotosBtn" onclick="deleteSelectedPhotos()">
+                        <i class="fas fa-trash"></i> Delete Selected
+                    </button>
+                </div>
+                <div class="toolbar-right">
+                    <span class="selected-count" id="photoSelectedCount"></span>
+                </div>
+            </div>
+
+            <div id="photoGallery" class="gallery-grid"></div>
+
+            <div id="photoEmpty" class="empty-state hidden">
+                <i class="fas fa-images"></i>
+                <p>Wala pang pictures. Mag-upload na!</p>
+            </div>
+        </div>
+
+        <!-- MUSIC -->
+        <div id="musicSection" class="hidden">
+            <div class="upload-area" onclick="document.getElementById('musicInput').click()">
+                <i class="fas fa-music"></i>
+                <p>Click para mag-upload ng music<br><small>(MP3, WAV, OGG)</small></p>
+                <input type="file" id="musicInput" accept="audio/*" multiple onchange="handleMusicUpload(event)">
+            </div>
+
+            <div class="toolbar">
+                <div class="toolbar-left">
+                    <button class="select-all-btn" onclick="toggleSelectAllMusic()">
+                        <i class="fas fa-check-square"></i> Select All
+                    </button>
+                    <button class="delete-selected-btn" id="deleteMusicBtn" onclick="deleteSelectedMusic()">
+                        <i class="fas fa-trash"></i> Delete Selected
+                    </button>
+                </div>
+                <div class="toolbar-right">
+                    <span class="selected-count" id="musicSelectedCount"></span>
+                </div>
+            </div>
+
+            <div id="musicList" class="music-list"></div>
+
+            <div id="musicEmpty" class="empty-state hidden">
+                <i class="fas fa-music"></i>
+                <p>Wala pang music. Mag-upload na!</p>
+            </div>
+        </div>
+
+        <!-- AI STUDIO -->
+        <div id="aiSection" class="hidden">
+            <div class="api-config">
+                <h4><i class="fas fa-key"></i> Google AI Studio API Key</h4>
+                <div class="form-group" style="margin-bottom:8px;">
+                    <input type="password" id="apiKeyInput" placeholder="Ilagay ang iyong Gemini API key (AIza...)">
+                </div>
+                <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;">
+                    <label style="display:flex; align-items:center; gap:6px; font-size:0.8rem; color:#9ca3af;">
+                        <input type="checkbox" id="rememberKey" style="width:auto;"> I-save ang key sa browser na ito
+                    </label>
+                    <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">
+                        <i class="fas fa-external-link-alt"></i> Kumuha ng API key
+                    </a>
+                </div>
+            </div>
+
+            <div class="upload-area" id="aiUploadArea" onclick="document.getElementById('aiImageInput').click()">
+                <i class="fas fa-image"></i>
+                <p id="aiUploadLabel">Click para pumili ng source image (optional para sa pag-edit)<br><small>Kung walang image, mag-ge-generate ng bagong larawan mula sa prompt</small></p>
+                <input type="file" id="aiImageInput" accept="image/*" onchange="handleAIImageSelect(event)">
+            </div>
+
+            <div id="aiPreviewWrap" class="hidden" style="margin-bottom:15px; text-align:center;">
+                <img id="aiPreviewImg" style="max-width:200px; border-radius:10px;">
+                <div>
+                    <button class="btn btn-secondary" style="margin-top:8px;" onclick="clearAISourceImage()">
+                        <i class="fas fa-times"></i> Alisin ang image
+                    </button>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>Prompt</label>
+                <textarea id="aiPrompt" placeholder="Hal: 'Gawing anime style ang larawan' o 'Gumawa ng larawan ng dragon na lumilipad sa ibabaw ng bulkan sa Pilipinas, sunset lighting'"></textarea>
+            </div>
+
+            <button class="btn ai-generate-btn" style="width:100%; justify-content:center;" onclick="runAIGenerate()">
+                <i class="fas fa-magic"></i> Generate / Edit Image
+            </button>
+
+            <div id="aiResult" class="ai-result hidden"></div>
+        </div>
+
+        <!-- VIDEO CALL -->
+        <div id="callSection" class="hidden">
+            <div id="callSetup">
+                <div class="api-config">
+                    <h4><i class="fas fa-circle-info"></i> Paano gamitin</h4>
+                    <p style="color:#9ca3af; font-size:0.85rem; line-height:1.5;">
+                        Maglagay ng anumang room code (hal. "1234"). Ibigay ang parehong code
+                        sa taong tatawagan mo. Magkaiba man kayo ng network (WiFi/mobile data),
+                        magkakakonekta kayo — awtomatikong gagamit ng relay server kung kailangan.
+                    </p>
+                </div>
+                <div class="form-group">
+                    <label>Room Code</label>
+                    <input type="text" id="roomCodeInput" placeholder="Hal. 1234" maxlength="20">
+                </div>
+                <button class="btn ai-generate-btn" style="width:100%; justify-content:center;" onclick="joinCallRoom()">
+                    <i class="fas fa-phone"></i> Sumali / Tumawag
+                </button>
+                <p id="callStatus" style="margin-top:12px; color:#9ca3af; font-size:0.85rem; text-align:center;"></p>
+            </div>
+
+            <div id="callActive" class="hidden">
+                <div class="video-grid">
+                    <div class="video-wrap">
+                        <video id="remoteVideo" autoplay playsinline></video>
+                        <span class="video-label" id="remoteLabel">Kumokonekta...</span>
+                    </div>
+                    <div class="video-wrap video-wrap-local">
+                        <video id="localVideo" autoplay playsinline muted></video>
+                        <span class="video-label">Ikaw</span>
+                    </div>
+                </div>
+                <div class="call-controls">
+                    <button class="music-btn" id="toggleMicBtn" onclick="toggleMic()"><i class="fas fa-microphone"></i></button>
+                    <button class="music-btn" id="toggleCamBtn" onclick="toggleCam()"><i class="fas fa-video"></i></button>
+                    <button class="music-btn delete" onclick="endCall()"><i class="fas fa-phone-slash"></i></button>
+                </div>
+            </div>
+        </div>
+
+        <audio id="audioPlayer"></audio>
+    </div>
+
+    <!-- Lightbox -->
+    <div class="lightbox" id="lightbox">
+        <button class="lightbox-close" onclick="closeLightbox()"><i class="fas fa-times"></i></button>
+        <img id="lightboxImg" src="">
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="app.js"></script>
+    <script src="call.js"></script>
+</body>
+</html>
